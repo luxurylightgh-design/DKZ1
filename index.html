@@ -1,23 +1,449 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DKZ</title>
     <script src="https://cdn.tailwindcss.com"></script>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.1.1/",
-    "react": "https://aistudiocdn.com/react@^19.1.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/"
-  }
-}
-</script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #111827;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            overflow: hidden;
+            touch-action: none;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.5); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            80% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 15px 5px rgba(250, 204, 21, 0.4); }
+            50% { box-shadow: 0 0 30px 10px rgba(250, 204, 21, 0.7); }
+        }
+    </style>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-gray-900 text-white overflow-hidden">
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+<body>
+    <main class="flex flex-col items-center justify-center w-screen h-screen bg-gray-900 font-sans p-4 select-none relative">
+        <div class="text-center mb-4 relative z-10">
+            <h1 class="text-5xl font-bold text-red-500 tracking-wider">DKZ</h1>
+            <p class="text-lg text-gray-400">Collect the orbs and drop them in the hole before they fade!</p>
+        </div>
+
+        <div class="w-full max-w-[500px] flex flex-col gap-2 mb-4 z-10">
+            <div class="w-full flex justify-between items-center text-base font-bold text-white px-2">
+                <span class="bg-black/50 px-3 py-1 rounded-md">Deposited: <span id="game-score">0</span> / 50</span>
+                <span class="bg-black/50 px-3 py-1 rounded-md text-xl">Time: <span id="time-left">200</span></span>
+                <span class="bg-black/50 px-3 py-1 rounded-md">Misses: <span id="misses-count">0</span> / 35</span>
+            </div>
+            <div class="w-full h-3 bg-black/50 rounded-full overflow-hidden border border-red-500/50 p-0.5">
+                <div id="score-bar" class="h-full bg-red-500 rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
+            </div>
+        </div>
+
+       <div class="absolute top-20 text-center w-full z-0 pointer-events-none">
+         <h2 id="total-score" class="text-9xl md:text-[20rem] font-black text-gray-800 opacity-75">0</h2>
+       </div>
+
+      <div class="w-full max-w-[500px] aspect-square relative flex flex-col justify-center items-center z-10">
+            <div 
+                id="game-area" 
+                class="w-full h-full bg-black bg-opacity-40 rounded-3xl border-2 border-red-500/50 shadow-lg shadow-red-500/20 overflow-hidden relative select-none touch-none"
+                aria-label="Game Area"
+                role="application"
+            >
+                <!-- Game elements will be injected here by JS -->
+
+                <div id="end-game-overlay" class="hidden absolute inset-0 bg-black bg-opacity-70 flex flex-col justify-center items-center z-20 backdrop-blur-sm">
+                    <h2 id="end-game-message" class="text-6xl font-bold mb-4 text-white"></h2>
+                    <button id="play-again-button" class="px-6 py-3 bg-red-600 text-white font-bold rounded-lg text-xl hover:bg-red-500 transition-colors">
+                        Play Again
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM Elements ---
+        const gameArea = document.getElementById('game-area');
+        const totalScoreEl = document.getElementById('total-score');
+        const gameScoreEl = document.getElementById('game-score');
+        const timeLeftEl = document.getElementById('time-left');
+        const missesCountEl = document.getElementById('misses-count');
+        const scoreBarEl = document.getElementById('score-bar');
+        const endGameOverlay = document.getElementById('end-game-overlay');
+        const endGameMessageEl = document.getElementById('end-game-message');
+        const playAgainButton = document.getElementById('play-again-button');
+
+        // --- Game Constants ---
+        const PLAYER_SIZE = 30;
+        const ORB_SIZE = 25;
+        const HOLE_SIZE = 60;
+        const MOVE_SPEED = 4;
+        const WIN_SCORE = 50;
+        const LOSE_MISSES = 35;
+        const GAME_DURATION = 200;
+        const INITIAL_ORB_LIFETIME = 40000;
+        const MIN_ORB_LIFETIME = 5000;
+        const LIFETIME_DECREMENT = 500;
+        const ORB_SPAWN_INTERVAL = 1500;
+
+        // --- Game State ---
+        let totalScore = 0;
+        let gameState = 'playing';
+        let playerPos = { x: 200, y: 200 };
+        let targetPos = null;
+        let orbs = [];
+        let holesPos = [];
+        let activeHoleIndex = null;
+        let carriedOrb = false;
+        let score = 0;
+        let misses = 0;
+        let timeLeft = GAME_DURATION;
+
+        let playerEl = null;
+
+        // --- Timers & Loop Refs ---
+        let gameLoopId = null;
+        let lastFrameTime = performance.now();
+        let timeSinceLastSpawn = 0;
+        let timeSinceLastSecond = 0;
+        let nextOrbId = 0;
+        let currentOrbLifetime = INITIAL_ORB_LIFETIME;
+
+        // --- Audio ---
+        let audioCtx = null;
+        const getAudioContext = () => {
+            if (typeof window !== 'undefined' && !audioCtx) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.error("Web Audio API is not supported in this browser.");
+                }
+            }
+            return audioCtx;
+        };
+
+        const playSound = (freq, duration, type, delay = 0) => {
+            const ctx = getAudioContext();
+            if (!ctx || ctx.state !== 'running') return;
+            
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
+
+            const now = ctx.currentTime;
+            const startTime = now + delay;
+            const endTime = startTime + duration / 1000;
+
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(0.1, startTime + 0.01);
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(freq, startTime);
+            oscillator.start(startTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, endTime);
+            oscillator.stop(endTime);
+        };
+        const playCollectSound = () => { playSound(523.25, 75, 'triangle'); playSound(783.99, 75, 'triangle', 0.05); };
+        const playDropSound = () => { playSound(783.99, 120, 'sine'); playSound(1046.50, 120, 'sine', 0.08); };
+        const playStartSound = () => { playSound(220, 100, 'square', 0); playSound(330, 100, 'square', 0.1); playSound(440, 100, 'square', 0.2); };
+        const playWinSound = () => { playSound(523.25, 100, 'sine', 0); playSound(659.25, 100, 'sine', 0.1); playSound(783.99, 100, 'sine', 0.2); playSound(1046.50, 200, 'sine', 0.3); };
+        const playLoseSound = () => { playSound(200, 250, 'sawtooth'); playSound(150, 350, 'sawtooth', 0.1); };
+
+        // --- Helper Functions ---
+        const getCenter = (pos, size) => ({ x: pos.x + size / 2, y: pos.y + size / 2 });
+        const getDistance = (pos1, pos2) => Math.sqrt(Math.pow(pos1.x - pos2.x, 2) + Math.pow(pos1.y - pos2.y, 2));
+
+        // --- UI Update Functions ---
+        function updateStatsUI() {
+            gameScoreEl.textContent = score;
+            timeLeftEl.textContent = timeLeft;
+            missesCountEl.textContent = misses;
+            scoreBarEl.style.width = `${Math.min((score / WIN_SCORE) * 100, 100)}%`;
+            totalScoreEl.textContent = totalScore;
+        }
+
+        function renderPlayer() {
+            if (!playerEl) return;
+            playerEl.style.left = `${playerPos.x}px`;
+            playerEl.style.top = `${playerPos.y}px`;
+            if (carriedOrb) {
+                playerEl.classList.remove('bg-cyan-400');
+                playerEl.classList.add('bg-yellow-400', 'shadow-lg', 'shadow-yellow-400/50');
+            } else {
+                playerEl.classList.add('bg-cyan-400');
+                playerEl.classList.remove('bg-yellow-400', 'shadow-lg', 'shadow-yellow-400/50');
+            }
+        }
+        
+        function renderHoles() {
+            const holeElements = gameArea.querySelectorAll('.hole');
+            holeElements.forEach((hole, index) => {
+                const isActive = index === activeHoleIndex;
+                if(isActive) {
+                    hole.className = 'hole absolute rounded-full transition-all duration-300 bg-gray-800 border-4 border-yellow-400';
+                    hole.style.animation = 'pulse-glow 2s infinite';
+                } else {
+                    hole.className = 'hole absolute rounded-full transition-all duration-300 bg-gray-900 border-4 border-gray-700';
+                    hole.style.animation = 'none';
+                }
+            });
+        }
+
+        function renderOrbs() {
+            // Remove orbs that are no longer in the state
+            const existingOrbEls = gameArea.querySelectorAll('.orb');
+            const orbIdsInState = new Set(orbs.map(o => o.id));
+            existingOrbEls.forEach(el => {
+                if (!orbIdsInState.has(parseInt(el.dataset.id))) {
+                    el.remove();
+                }
+            });
+
+            // Add or update orbs
+            orbs.forEach(orb => {
+                let orbEl = gameArea.querySelector(`.orb[data-id='${orb.id}']`);
+                if (!orbEl) {
+                    orbEl = document.createElement('div');
+                    orbEl.dataset.id = orb.id;
+                    orbEl.className = 'orb absolute rounded-full bg-red-500';
+                    orbEl.style.width = `${ORB_SIZE}px`;
+                    orbEl.style.height = `${ORB_SIZE}px`;
+                    orbEl.style.animation = `fadeIn 0.5s, fadeOut ${orb.lifetime / 1000}s linear forwards`;
+                    gameArea.appendChild(orbEl);
+                }
+                orbEl.style.left = `${orb.pos.x}px`;
+                orbEl.style.top = `${orb.pos.y}px`;
+            });
+        }
+
+        function handleGameEnd(result) {
+            if (result === 'win') {
+                totalScore += 10;
+                endGameMessageEl.textContent = 'You Win!';
+                playWinSound();
+            } else {
+                totalScore -= 20;
+                endGameMessageEl.textContent = 'You Lose!';
+                playLoseSound();
+            }
+            localStorage.setItem('dkz-score', totalScore.toString());
+            totalScoreEl.textContent = totalScore;
+            endGameOverlay.style.display = 'flex';
+        }
+
+        // --- Game Logic ---
+        function startGame() {
+            if (gameLoopId) cancelAnimationFrame(gameLoopId);
+            playStartSound();
+
+            gameState = 'playing';
+            score = 0;
+            misses = 0;
+            orbs = [];
+            targetPos = null;
+            carriedOrb = false;
+            timeLeft = GAME_DURATION;
+            currentOrbLifetime = INITIAL_ORB_LIFETIME;
+            nextOrbId = 0;
+            timeSinceLastSpawn = 0;
+            timeSinceLastSecond = 0;
+            
+            endGameOverlay.style.display = 'none';
+            gameArea.innerHTML = ''; // Clear previous game elements
+
+            const { clientWidth, clientHeight } = gameArea;
+            holesPos = [
+                { x: clientWidth * 0.5 - HOLE_SIZE / 2, y: clientHeight * 0.5 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.5 - HOLE_SIZE / 2, y: clientHeight * 0.15 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.5 - HOLE_SIZE / 2, y: clientHeight * 0.85 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.2 - HOLE_SIZE / 2, y: clientHeight * 0.35 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.8 - HOLE_SIZE / 2, y: clientHeight * 0.35 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.2 - HOLE_SIZE / 2, y: clientHeight * 0.65 - HOLE_SIZE / 2 },
+                { x: clientWidth * 0.8 - HOLE_SIZE / 2, y: clientHeight * 0.65 - HOLE_SIZE / 2 },
+            ];
+            
+            holesPos.forEach(hole => {
+                const holeEl = document.createElement('div');
+                holeEl.className = 'hole'; // RenderHoles will style it
+                holeEl.style.width = `${HOLE_SIZE}px`;
+                holeEl.style.height = `${HOLE_SIZE}px`;
+                holeEl.style.left = `${hole.x}px`;
+                holeEl.style.top = `${hole.y}px`;
+                gameArea.appendChild(holeEl);
+            });
+            
+            activeHoleIndex = Math.floor(Math.random() * holesPos.length);
+            
+            playerPos = { x: clientWidth / 2 - PLAYER_SIZE / 2, y: clientHeight / 2 - PLAYER_SIZE / 2 };
+            playerEl = document.createElement('div');
+            playerEl.style.width = `${PLAYER_SIZE}px`;
+            playerEl.style.height = `${PLAYER_SIZE}px`;
+            playerEl.className = 'absolute rounded-md transition-colors duration-200 bg-cyan-400';
+            playerEl.style.transform = `translateZ(0)`;
+            gameArea.appendChild(playerEl);
+            
+            gameArea.appendChild(endGameOverlay); // Re-append overlay on top
+            
+            updateStatsUI();
+            renderHoles();
+            renderPlayer();
+
+            lastFrameTime = performance.now();
+            gameLoopId = requestAnimationFrame(loop);
+        }
+
+        function handlePointerDown(e) {
+            const ctx = getAudioContext();
+            if (ctx && ctx.state === 'suspended') {
+                ctx.resume();
+            }
+
+            const rect = gameArea.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            targetPos = { x: x - PLAYER_SIZE / 2, y: y - PLAYER_SIZE / 2 };
+        }
+        
+        function loop(currentTime) {
+            if (gameState !== 'playing') return;
+
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+
+            // 1. Countdown Timer
+            timeSinceLastSecond += deltaTime;
+            if (timeSinceLastSecond >= 1000) {
+                timeSinceLastSecond -= 1000;
+                timeLeft = Math.max(0, timeLeft - 1);
+                if (timeLeft <= 0) {
+                    gameState = 'lost';
+                    handleGameEnd('loss');
+                    return;
+                }
+            }
+
+            // 2. Spawn Orbs
+            timeSinceLastSpawn += deltaTime;
+            if (timeSinceLastSpawn >= ORB_SPAWN_INTERVAL) {
+                timeSinceLastSpawn -= ORB_SPAWN_INTERVAL;
+                let newPos, tooClose;
+                do {
+                    newPos = { x: Math.random() * (gameArea.clientWidth - ORB_SIZE), y: Math.random() * (gameArea.clientHeight - ORB_SIZE) };
+                    tooClose = holesPos.some(hole => getDistance(getCenter(newPos, ORB_SIZE), getCenter(hole, HOLE_SIZE)) < 150);
+                } while (tooClose);
+                orbs.push({ id: nextOrbId++, pos: newPos, spawnTime: Date.now(), lifetime: currentOrbLifetime });
+                currentOrbLifetime = Math.max(MIN_ORB_LIFETIME, currentOrbLifetime - LIFETIME_DECREMENT);
+            }
+
+            // 3. Update Player Position
+            if (targetPos) {
+                const dx = targetPos.x - playerPos.x;
+                const dy = targetPos.y - playerPos.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < MOVE_SPEED) {
+                    playerPos = { ...targetPos };
+                    targetPos = null;
+                } else {
+                    playerPos.x += (dx / distance) * MOVE_SPEED;
+                    playerPos.y += (dy / distance) * MOVE_SPEED;
+                }
+                playerPos.x = Math.max(0, Math.min(playerPos.x, gameArea.clientWidth - PLAYER_SIZE));
+                playerPos.y = Math.max(0, Math.min(playerPos.y, gameArea.clientHeight - PLAYER_SIZE));
+            }
+
+            // 4. Game Logic & Collisions
+            const now = Date.now();
+            const playerCenter = getCenter(playerPos, PLAYER_SIZE);
+            const stillAliveOrbs = [];
+            let newlyMissed = 0;
+
+            orbs.forEach(orb => {
+                if (now < orb.spawnTime + orb.lifetime) stillAliveOrbs.push(orb);
+                else newlyMissed++;
+            });
+
+            if (newlyMissed > 0) {
+                misses += newlyMissed;
+                orbs = stillAliveOrbs;
+                if (misses >= LOSE_MISSES) {
+                    gameState = 'lost';
+                    handleGameEnd('loss');
+                    return;
+                }
+            }
+
+            if (!carriedOrb) {
+                let pickedUpOrbId = null;
+                const remainingOrbs = stillAliveOrbs.filter(orb => {
+                    if (pickedUpOrbId) return true;
+                    if (getDistance(playerCenter, getCenter(orb.pos, ORB_SIZE)) < (PLAYER_SIZE / 2 + ORB_SIZE / 2)) {
+                        pickedUpOrbId = orb.id;
+                        return false;
+                    }
+                    return true;
+                });
+                if (pickedUpOrbId !== null) {
+                    orbs = remainingOrbs;
+                    carriedOrb = true;
+                    playCollectSound();
+                }
+            } else {
+                let scored = false;
+                if (activeHoleIndex !== null) {
+                    const activeHole = holesPos[activeHoleIndex];
+                    if (getDistance(playerCenter, getCenter(activeHole, HOLE_SIZE)) < (PLAYER_SIZE / 2 + HOLE_SIZE / 2)) {
+                        scored = true;
+                    }
+                }
+                if (scored) {
+                    carriedOrb = false;
+                    score++;
+                    playDropSound();
+
+                    let nextHoleIndex;
+                    do {
+                        nextHoleIndex = Math.floor(Math.random() * holesPos.length);
+                    } while (holesPos.length > 1 && nextHoleIndex === activeHoleIndex);
+                    activeHoleIndex = nextHoleIndex;
+
+                    if (score >= WIN_SCORE) {
+                        gameState = 'won';
+                        handleGameEnd('win');
+                        return;
+                    }
+                }
+            }
+
+            // 5. Update UI
+            updateStatsUI();
+            renderPlayer();
+            renderOrbs();
+            renderHoles();
+
+            gameLoopId = requestAnimationFrame(loop);
+        }
+
+        // --- Initialization ---
+        totalScore = parseInt(localStorage.getItem('dkz-score') || '0', 10);
+        totalScoreEl.textContent = totalScore;
+        gameArea.addEventListener('pointerdown', handlePointerDown);
+        playAgainButton.addEventListener('click', startGame);
+
+        startGame();
+    });
+    </script>
+<script type="module" src="/index.tsx"></script>
+</body>
 </html>
